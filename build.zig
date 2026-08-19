@@ -1,13 +1,12 @@
 const std = @import("std");
 const uri = std.Uri.parse(@import("build.zig.zon").dependencies.sdl3.url) catch unreachable;
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const sdl_dep = b.lazyDependency("sdl3", .{}) orelse @panic("null sdl3 lazy dependency");
     const include = sdl_dep.path("include");
-    const wayland_protocols = sdl_dep.path("wayland-protocols");
     const source = sdl_dep.path("src");
 
     const preferred_linkage = b.option(std.builtin.LinkMode, "preferred_linkage", "SDL linkage") orelse .static;
@@ -55,7 +54,6 @@ pub fn build(b: *std.Build) void {
 
     var windows = false;
     var linux = false;
-    // var linux_deps_values: ?LinuxDepsValues = null;
     var macos = false;
     var emscripten = false;
     var msvc = false; // Assume mingw-w64 as the default for Windows
@@ -67,9 +65,6 @@ pub fn build(b: *std.Build) void {
         },
         .linux => {
             linux = true;
-            // if (b.lazyImport(@This(), "sdl_linux_deps")) |build_zig| {
-            //     linux_deps_values = LinuxDepsValues.fromBuildZig(b, build_zig);
-            // }
             musl = target.result.abi.isMusl();
         },
         .macos => {
@@ -99,203 +94,480 @@ pub fn build(b: *std.Build) void {
         else => {},
     }
 
-    const build_config_h = build_config_h: {
-        // const cpu = target.result.cpu;
-        // const x86 = cpu.arch.isX86();
-        // const arm = cpu.arch.isArm();
-        // const aarch64 = cpu.arch.isAARCH64();
-        // const loongarch = cpu.arch == .loongarch32 or cpu.arch == .loongarch64;
+    const build_config_h: *std.Build.Step.ConfigHeader = build_config_h: {
+        const cpu = target.result.cpu;
+        const x86 = cpu.arch.isX86();
+        const arm = cpu.arch.isArm();
+        const aarch64 = cpu.arch.isAARCH64();
+        const loongarch = cpu.arch == .loongarch32 or cpu.arch == .loongarch64;
         break :build_config_h b.addConfigHeader(.{
             .style = .{ .cmake = sdl_dep.path("include/build_config/SDL_build_config.h.cmake") },
             .include_path = "SDL_build_config.h",
         }, .{
             .SDL_PLATFORM_PRIVATE = false,
-            .HAVE_GCC_ATOMICS = linux or windows or macos,
-            .HAVE_FLOAT_H = true,
-            .HAVE_STDARG_H = true,
-            .HAVE_STDDEF_H = true,
-            .HAVE_STDINT_H = true,
-            .HAVE_LIBC = true,
-            .HAVE_ALLOCA_H = linux or macos,
-            .HAVE_ICONV_H = linux or macos,
-            .HAVE_INTTYPES_H = true,
-            .HAVE_LIMITS_H = true,
-            .HAVE_MALLOC_H = windows,
-            .HAVE_MATH_H = true,
-            .HAVE_MEMORY_H = true,
-            .HAVE_SIGNAL_H = true,
-            .HAVE_STDIO_H = true,
-            .HAVE_STDLIB_H = true,
-            .HAVE_STRINGS_H = linux or macos,
-            .HAVE_STRING_H = true,
-            .HAVE_SYS_TYPES_H = true,
-            .HAVE_WCHAR_H = true,
-            .HAVE_DLOPEN = linux or macos,
-            .HAVE_MALLOC = true,
-            .HAVE_FDATASYNC = linux,
-            .HAVE_GETENV = true,
-            .HAVE_GETHOSTNAME = linux or macos,
-            .HAVE_SETENV = linux or macos,
-            .HAVE_PUTENV = true,
-            .HAVE_UNSETENV = linux or macos,
-            .HAVE_MEMSET = true,
-            .HAVE_MEMCPY = true,
-            .HAVE_MEMMOVE = true,
-            .HAVE_MEMCMP = true,
-            .HAVE_STRLEN = true,
-            .HAVE_STRCHR = true,
-            .HAVE_STRRCHR = true,
-            .HAVE_STRSTR = true,
-            .HAVE_STRTOK_R = linux or macos,
-            .HAVE_STRTOL = true,
-            .HAVE_STRTOUL = true,
-            .HAVE_STRTOLL = true,
-            .HAVE_STRTOULL = true,
-            .HAVE_STRTOD = true,
-            .HAVE_STRCMP = true,
-            .HAVE_STRNCMP = true,
-            .HAVE_VSSCANF = true,
-            .HAVE_VSNPRINTF = true,
-            .HAVE_CEIL = true,
-            .HAVE_CEILF = true,
-            .HAVE_COS = true,
-            .HAVE_COSF = true,
-            .HAVE_EXP = true,
-            .HAVE_EXPF = true,
-            .HAVE_FABS = true,
-            .HAVE_FABSF = true,
-            .HAVE_FLOOR = true,
-            .HAVE_FLOORF = true,
-            .HAVE_ISINF = true,
-            .HAVE_ISNAN = true,
-            .HAVE_LOG = true,
-            .HAVE_LOGF = true,
-            .HAVE_SIN = true,
-            .HAVE_SINF = true,
-            .HAVE_SQRT = true,
-            .HAVE_SQRTF = true,
-            .HAVE_TAN = true,
-            .HAVE_TANF = true,
-            .HAVE_FOPEN64 = linux,
-            .HAVE_FSEEKO = linux or macos,
-            .HAVE_FSEEKO64 = linux,
+            .HAVE_GCC_ATOMICS = windows or linux or macos or emscripten,
+            .HAVE_GCC_SYNC_LOCK_TEST_AND_SET = false, // MARK
+            .SDL_DISABLE_ALLOCA = false, // MARK
+            .HAVE_FLOAT_H = windows or linux or macos or emscripten,
+            .HAVE_STDARG_H = windows or linux or macos or emscripten,
+            .HAVE_STDDEF_H = windows or linux or macos or emscripten,
+            .HAVE_STDINT_H = windows or linux or macos or emscripten,
+            .HAVE_LIBC = windows or linux or macos or emscripten,
+            .HAVE_ALLOCA_H = linux or macos or emscripten,
+            .HAVE_ICONV_H = linux or macos or emscripten,
+            .HAVE_INTTYPES_H = windows or linux or macos or emscripten,
+            .HAVE_LIMITS_H = windows or linux or macos or emscripten,
+            .HAVE_MALLOC_H = windows or linux or emscripten,
+            .HAVE_MATH_H = windows or linux or macos or emscripten,
+            .HAVE_MEMORY_H = windows or linux or macos or emscripten,
+            .HAVE_SIGNAL_H = windows or linux or macos or emscripten,
+            .HAVE_STDIO_H = windows or linux or macos or emscripten,
+            .HAVE_STDLIB_H = windows or linux or macos or emscripten,
+            .HAVE_STRINGS_H = (windows and !msvc) or linux or macos or emscripten,
+            .HAVE_STRING_H = windows or linux or macos or emscripten,
+            .HAVE_SYS_TYPES_H = windows or linux or macos or emscripten,
+            .HAVE_WCHAR_H = windows or linux or macos or emscripten,
+            .HAVE_PTHREAD_NP_H = false, // MARK
+            .HAVE_DLOPEN = linux or macos or emscripten,
+            .HAVE_MALLOC = windows or linux or macos or emscripten,
+            .HAVE_FDATASYNC = linux or emscripten,
+            .HAVE_GETENV = windows or linux or macos or emscripten,
+            .HAVE_GETHOSTNAME = linux or macos or emscripten,
+            .HAVE_SETENV = linux or macos or emscripten,
+            .HAVE_PUTENV = windows or linux or macos or emscripten,
+            .HAVE_UNSETENV = linux or macos or emscripten,
+            .HAVE_ABS = windows or linux or macos or emscripten, // MARK
+            .HAVE_BCOPY = linux or macos or emscripten, // MARK
+            .HAVE_MEMSET = windows or linux or macos or emscripten,
+            .HAVE_MEMCPY = windows or linux or macos or emscripten,
+            .HAVE_MEMMOVE = windows or linux or macos or emscripten,
+            .HAVE_MEMCMP = windows or linux or macos or emscripten,
+            .HAVE_WCSLEN = windows or linux or macos or emscripten, // MARK
+            .HAVE_WCSNLEN = windows or linux or macos or emscripten, // MARK
+            .HAVE_WCSLCPY = macos, // MARK
+            .HAVE_WCSLCAT = macos, // MARK
+            .HAVE_WCSSTR = windows or linux or macos or emscripten, // MARK
+            .HAVE_WCSCMP = windows or linux or macos or emscripten, // MARK
+            .HAVE_WCSNCMP = windows or linux or macos or emscripten, // MARK
+            .HAVE_WCSTOL = windows or linux or macos or emscripten, // MARK
+            .HAVE_STRLEN = windows or linux or macos or emscripten,
+            .HAVE_STRNLEN = windows or linux or macos or emscripten, // MARK
+            .HAVE_STRLCPY = (linux and musl) or macos or emscripten, // MARK
+            .HAVE_STRLCAT = (linux and musl) or macos or emscripten, // MARK
+            .HAVE_STRPBRK = windows or linux or macos or emscripten, // MARK
+            .HAVE__STRREV = windows, // MARK
+            .HAVE_INDEX = linux or macos or emscripten, // MARK
+            .HAVE_RINDEX = linux or macos or emscripten, // MARK
+            .HAVE_STRCHR = windows or linux or macos or emscripten,
+            .HAVE_STRRCHR = windows or linux or macos or emscripten,
+            .HAVE_STRSTR = windows or linux or macos or emscripten,
+            .HAVE_STRNSTR = macos, // MARK
+            .HAVE_STRTOK_R = (windows and !msvc) or linux or macos or emscripten,
+            .HAVE_ITOA = windows, // MARK
+            .HAVE__LTOA = windows, // MARK
+            .HAVE__ULTOA = windows, // MARK
+            .HAVE_STRTOL = windows or linux or macos or emscripten,
+            .HAVE_STRTOUL = windows or linux or macos or emscripten,
+            .HAVE__I64TOA = windows, // MARK
+            .HAVE__UI64TOA = windows, // MARK
+            .HAVE_STRTOLL = windows or linux or macos or emscripten,
+            .HAVE_STRTOULL = windows or linux or macos or emscripten,
+            .HAVE_STRTOD = windows or linux or macos or emscripten,
+            .HAVE_ATOI = windows or linux or macos or emscripten,
+            .HAVE_ATOF = windows or linux or macos or emscripten,
+            .HAVE_STRCMP = windows or linux or macos or emscripten,
+            .HAVE_STRNCMP = windows or linux or macos or emscripten,
+            .HAVE_VSSCANF = windows or linux or macos or emscripten,
+            .HAVE_VSNPRINTF = windows or linux or macos or emscripten,
+            .HAVE_ACOS = windows or linux or macos or emscripten, // MARK
+            .HAVE_ACOSF = windows or linux or macos or emscripten, // MARK
+            .HAVE_ASIN = windows or linux or macos or emscripten, // MARK
+            .HAVE_ASINF = windows or linux or macos or emscripten, // MARK
+            .HAVE_ATAN = windows or linux or macos or emscripten, // MARK
+            .HAVE_ATANF = windows or linux or macos or emscripten, // MARK
+            .HAVE_ATAN2 = windows or linux or macos or emscripten, // MARK
+            .HAVE_ATAN2F = windows or linux or macos or emscripten, // MARK
+            .HAVE_CEIL = windows or linux or macos or emscripten,
+            .HAVE_CEILF = windows or linux or macos or emscripten,
+            .HAVE_COPYSIGN = windows or linux or macos or emscripten, // MARK
+            .HAVE_COPYSIGNF = windows or linux or macos or emscripten, // MARK
+            .HAVE__COPYSIGN = windows, // MARK
+            .HAVE_COS = windows or linux or macos or emscripten,
+            .HAVE_COSF = windows or linux or macos or emscripten,
+            .HAVE_EXP = windows or linux or macos or emscripten,
+            .HAVE_EXPF = windows or linux or macos or emscripten,
+            .HAVE_FABS = windows or linux or macos or emscripten,
+            .HAVE_FABSF = windows or linux or macos or emscripten,
+            .HAVE_FLOOR = windows or linux or macos or emscripten,
+            .HAVE_FLOORF = windows or linux or macos or emscripten,
+            .HAVE_FMOD = windows or linux or macos or emscripten, // MARK
+            .HAVE_FMODF = windows or linux or macos or emscripten, // MARK
+            .HAVE_ISINF = windows or linux or macos or emscripten,
+            .HAVE_ISINFF = (linux and !musl) or emscripten, // MARK
+            .HAVE_ISINF_FLOAT_MACRO = windows or linux or macos or emscripten, // MARK
+            .HAVE_ISNAN = windows or linux or macos or emscripten,
+            .HAVE_ISNANF = (linux and !musl) or emscripten, // MARK
+            .HAVE_ISNAN_FLOAT_MACRO = windows or linux or macos or emscripten, // MARK
+            .HAVE_LOG = windows or linux or macos or emscripten,
+            .HAVE_LOGF = windows or linux or macos or emscripten,
+            .HAVE_LOG10 = windows or linux or macos or emscripten, // MARK
+            .HAVE_LOG10F = windows or linux or macos or emscripten, // MARK
+            .HAVE_LROUND = windows or linux or macos or emscripten, // MARK
+            .HAVE_LROUNDF = windows or linux or macos or emscripten, // MARK
+            .HAVE_MODF = windows or linux or macos or emscripten, // MARK
+            .HAVE_MODFF = windows or linux or macos or emscripten, // MARK
+            .HAVE_POW = windows or linux or macos or emscripten, // MARK
+            .HAVE_POWF = windows or linux or macos or emscripten, // MARK
+            .HAVE_ROUND = windows or linux or macos or emscripten, // MARK
+            .HAVE_ROUNDF = windows or linux or macos or emscripten, // MARK
+            .HAVE_SCALBN = windows or linux or macos or emscripten, // MARK
+            .HAVE_SCALBNF = windows or linux or macos or emscripten, // MARK
+            .HAVE_SIN = windows or linux or macos or emscripten,
+            .HAVE_SINF = windows or linux or macos or emscripten,
+            .HAVE_SQRT = windows or linux or macos or emscripten,
+            .HAVE_SQRTF = windows or linux or macos or emscripten,
+            .HAVE_TAN = windows or linux or macos or emscripten,
+            .HAVE_TANF = windows or linux or macos or emscripten,
+            .HAVE_TRUNC = windows or linux or macos or emscripten, // MARK
+            .HAVE_TRUNCF = windows or linux or macos or emscripten, // MARK
+            .HAVE__FSEEKI64 = windows, // MARK
+            .HAVE_FOPEN64 = (windows and !msvc) or (linux and !musl) or emscripten,
+            .HAVE_FSEEKO = (windows and !msvc) or linux or macos or emscripten,
+            .HAVE_FSEEKO64 = (windows and !msvc) or (linux and !musl) or emscripten,
             .HAVE_MEMFD_CREATE = linux,
-            .HAVE_POSIX_FALLOCATE = linux,
-            .HAVE_SIGACTION = linux or macos,
-            .HAVE_SIGTIMEDWAIT = linux,
-            .HAVE_SA_SIGACTION = linux or macos,
-            .HAVE_ST_MTIM = linux,
-            .HAVE_SETJMP = linux or macos,
-            .HAVE_NANOSLEEP = linux or macos,
-            .HAVE_GMTIME_R = linux or macos,
-            .HAVE_LOCALTIME_R = linux or macos,
-            .HAVE_NL_LANGINFO = linux or macos,
-            .HAVE_SYSCONF = linux or macos,
-            .HAVE_CLOCK_GETTIME = linux,
-            .HAVE_GETPAGESIZE = linux or macos,
-            .HAVE_ICONV = linux,
+            .HAVE_POSIX_FALLOCATE = linux or emscripten,
+            .HAVE_SIGACTION = linux or macos or emscripten,
+            .HAVE_SIGTIMEDWAIT = linux or emscripten,
+            .HAVE_SA_SIGACTION = linux or macos or emscripten,
+            .HAVE_ST_MTIM = linux or emscripten,
+            .HAVE_SETJMP = linux or macos or emscripten,
+            .HAVE_NANOSLEEP = linux or macos or emscripten,
+            .HAVE_GMTIME_R = linux or macos or emscripten,
+            .HAVE_LOCALTIME_R = linux or macos or emscripten,
+            .HAVE_NL_LANGINFO = linux or macos or emscripten,
+            .HAVE_SYSCONF = linux or macos or emscripten,
+            .HAVE_SYSCTLBYNAME = macos, // MARK
+            .HAVE_CLOCK_GETTIME = linux or emscripten,
+            .HAVE_GETPAGESIZE = linux or macos or emscripten,
+            .HAVE_ICONV = linux or emscripten,
+            .SDL_USE_LIBICONV = false, // MARK
             .HAVE_PTHREAD_SETNAME_NP = linux or macos,
-            .HAVE_SEM_TIMEDWAIT = linux,
+            .HAVE_PTHREAD_SET_NAME_NP = false, // MARK
+            .HAVE_SEM_TIMEDWAIT = linux or (emscripten and emscripten_pthreads),
             .HAVE_GETAUXVAL = linux,
+            .HAVE_ELF_AUX_INFO = false, // MARK
             .HAVE_PPOLL = linux,
-            .HAVE__EXIT = linux or macos or windows,
-            .HAVE_GETRESUID = linux,
-            .HAVE_GETRESGID = linux,
-            .HAVE_O_CLOEXEC = linux or macos,
+            .HAVE__EXIT = windows or linux or macos or emscripten,
+            .HAVE_GETRESUID = linux or emscripten,
+            .HAVE_GETRESGID = linux or emscripten,
+            .HAVE_DBUS_DBUS_H = linux, // MARK
+            .HAVE_FCITX = linux, // MARK
+            .HAVE_IBUS_IBUS_H = linux, // MARK
+            .HAVE_INOTIFY_INIT1 = linux, // MARK
+            .HAVE_INOTIFY = linux, // MARK
+            .HAVE_LIBUSB = linux, // MARK
+            .HAVE_O_CLOEXEC = linux or macos or emscripten,
             .HAVE_LINUX_INPUT_H = linux,
-            .SDL_FRIBIDI_DYNAMIC = "",
-            .SDL_LIBTHAI_DYNAMIC = "",
-            .SDL_DEFAULT_ASSERT_LEVEL = 0,
+            .HAVE_LIBUDEV_H = linux, // MARK
+            .HAVE_LIBDECOR_H = linux, // MARK
+            .HAVE_LIBURING_H = linux, // MARK
+            .HAVE_FRIBIDI_H = linux, // MARK
+            .SDL_FRIBIDI_DYNAMIC = if (target.result.os.tag == .linux) "\"libfribidi.so.0\"" else "",
+            .HAVE_LIBTHAI_H = linux, // MARK
+            .SDL_LIBTHAI_DYNAMIC = if (target.result.os.tag == .linux) "\"libthai.so.0\"" else "",
+            .HAVE_DDRAW_H = windows, // MARK
+            .HAVE_DSOUND_H = windows, // MARK
+            .HAVE_DINPUT_H = windows, // MARK
+            .HAVE_XINPUT_H = windows, // MARK
+            .HAVE_WINDOWS_GAMING_INPUT_H = false, // MARK
+            .HAVE_GAMEINPUT_H = (windows and msvc), // MARK
+            .HAVE_DXGI_H = windows, // MARK
+            .HAVE_DXGI1_5_H = windows, // MARK
+            .HAVE_DXGI1_6_H = windows, // MARK
+            .HAVE_MMDEVICEAPI_H = windows, // MARK
+            .HAVE_TPCSHRD_H = windows, // MARK
+            .HAVE_ROAPI_H = (windows and !msvc), // MARK
+            .HAVE_SHELLSCALINGAPI_H = windows, // MARK
+            .USE_POSIX_SPAWN = false, // MARK
+            .HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR = macos, // MARK
+            .HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP = linux or macos or emscripten, // MARK
+            .SDL_DISABLE_DLOPEN_NOTES = false, // MARK
+            .SDL_DEFAULT_ASSERT_LEVEL_CONFIGURED = false, // MARK
+            .SDL_DEFAULT_ASSERT_LEVEL = null,
+            .SDL_AUDIO_DISABLED = false, // MARK
+            .SDL_VIDEO_DISABLED = false, // MARK
+            .SDL_GPU_DISABLED = false, // MARK
+            .SDL_RENDER_DISABLED = false, // MARK
+            .SDL_CAMERA_DISABLED = false, // MARK
+            .SDL_JOYSTICK_DISABLED = false, // MARK
+            .SDL_HAPTIC_DISABLED = false, // MARK
+            .SDL_HIDAPI_DISABLED = false, // MARK
+            .SDL_POWER_DISABLED = false, // MARK
+            .SDL_SENSOR_DISABLED = false, // MARK
+            .SDL_DIALOG_DISABLED = false, // MARK
+            .SDL_THREADS_DISABLED = (emscripten and !emscripten_pthreads), // MARK
             .SDL_AUDIO_DRIVER_ALSA = linux,
-            .SDL_AUDIO_DRIVER_ALSA_DYNAMIC = if (linux) "\"libasound.so.2\"" else "",
+            .SDL_AUDIO_DRIVER_ALSA_DYNAMIC = if (target.result.os.tag == .linux) "\"libasound.so.2\"" else "",
+            .SDL_AUDIO_DRIVER_OPENSLES = false, // MARK
+            .SDL_AUDIO_DRIVER_AAUDIO = false, // MARK
             .SDL_AUDIO_DRIVER_COREAUDIO = macos,
-            .SDL_AUDIO_DRIVER_DISK = linux or windows or macos,
-            .SDL_AUDIO_DRIVER_DUMMY = true,
-            .SDL_AUDIO_DRIVER_JACK_DYNAMIC = "",
-            .SDL_AUDIO_DRIVER_PIPEWIRE_DYNAMIC = "",
-            .SDL_AUDIO_DRIVER_PULSEAUDIO_DYNAMIC = "",
-            .SDL_AUDIO_DRIVER_SNDIO_DYNAMIC = "",
+            .SDL_AUDIO_DRIVER_DISK = windows or linux or macos or emscripten,
+            .SDL_AUDIO_DRIVER_DSOUND = windows, // MARK
+            .SDL_AUDIO_DRIVER_DUMMY = windows or linux or macos or emscripten,
+            .SDL_AUDIO_DRIVER_EMSCRIPTEN = emscripten, // MARK
+            .SDL_AUDIO_DRIVER_HAIKU = false, // MARK
+            .SDL_AUDIO_DRIVER_JACK = linux, // MARK
+            .SDL_AUDIO_DRIVER_JACK_DYNAMIC = if (target.result.os.tag == .linux) "\"libjack.so.0\"" else "",
+            .SDL_AUDIO_DRIVER_NETBSD = false,
+            .SDL_AUDIO_DRIVER_OSS = false,
+            .SDL_AUDIO_DRIVER_PIPEWIRE = linux, // MARK
+            .SDL_AUDIO_DRIVER_PIPEWIRE_DYNAMIC = if (target.result.os.tag == .linux) "\"libpipewire-0.3.so.0\"" else "",
+            .SDL_AUDIO_DRIVER_PULSEAUDIO = linux, // MARK
+            .SDL_AUDIO_DRIVER_PULSEAUDIO_DYNAMIC = if (target.result.os.tag == .linux) "\"libpulse.so.0\"" else "",
+            .SDL_AUDIO_DRIVER_SNDIO = linux, // MARK
+            .SDL_AUDIO_DRIVER_SNDIO_DYNAMIC = if (target.result.os.tag == .linux) "\"libsndio.so.7\"" else "",
+            .SDL_AUDIO_DRIVER_WASAPI = windows, // MARK
+            .SDL_AUDIO_DRIVER_VITA = false, // MARK
+            .SDL_AUDIO_DRIVER_PSP = false, // MARK
+            .SDL_AUDIO_DRIVER_PS2 = false, // MARK
+            .SDL_AUDIO_DRIVER_N3DS = false, // MARK
+            .SDL_AUDIO_DRIVER_NGAGE = false, // MARK
+            .SDL_AUDIO_DRIVER_QNX = false, // MARK
+            .SDL_AUDIO_DRIVER_PRIVATE = false, // MARK
             .SDL_INPUT_LINUXEV = linux,
             .SDL_INPUT_LINUXKD = linux,
-            .SDL_JOYSTICK_HIDAPI = linux or windows or macos,
+            .SDL_INPUT_FBSDKBIO = false, // MARK
+            .SDL_INPUT_WSCONS = false, // MARK
+            .SDL_HAVE_MACHINE_JOYSTICK_H = false, // MARK
+            .SDL_JOYSTICK_ANDROID = false, // MARK
+            .SDL_JOYSTICK_DINPUT = windows, // MARK
+            .SDL_JOYSTICK_DUMMY = false, // MARK
+            .SDL_JOYSTICK_EMSCRIPTEN = emscripten, // MARK
+            .SDL_JOYSTICK_GAMEINPUT = (windows and msvc), // MARK
+            .SDL_JOYSTICK_HAIKU = false, // MARK
+            .SDL_JOYSTICK_HIDAPI = windows or linux or macos,
+            .SDL_JOYSTICK_IOKIT = macos, // MARK
             .SDL_JOYSTICK_LINUX = linux,
-            .SDL_JOYSTICK_VIRTUAL = linux or windows or macos,
+            .SDL_JOYSTICK_MFI = macos, // MARK
+            .SDL_JOYSTICK_N3DS = false, // MARK
+            .SDL_JOYSTICK_PS2 = false, // MARK
+            .SDL_JOYSTICK_PSP = false, // MARK
+            .SDL_JOYSTICK_RAWINPUT = windows, // MARK
+            .SDL_JOYSTICK_USBHID = false, // MARK
+            .SDL_JOYSTICK_VIRTUAL = windows or linux or macos or emscripten,
+            .SDL_JOYSTICK_VITA = false, // MARK
+            .SDL_JOYSTICK_WGI = false, // MARK
+            .SDL_JOYSTICK_XINPUT = windows, // MARK
+            .SDL_JOYSTICK_PRIVATE = false, // MARK
+            .SDL_HAPTIC_DUMMY = emscripten, // MARK
             .SDL_HAPTIC_LINUX = linux,
+            .SDL_HAPTIC_IOKIT = macos, // MARK
             .SDL_HAPTIC_DINPUT = windows,
-            .SDL_LIBUSB_DYNAMIC = "",
-            .SDL_UDEV_DYNAMIC = "",
+            .SDL_HAPTIC_ANDROID = false, // MARK
+            .SDL_HAPTIC_PRIVATE = false, // MARK
+            .SDL_LIBUSB_DYNAMIC = if (target.result.os.tag == .linux) "\"libusb-1.0.so.0\"" else "",
+            .SDL_UDEV_DYNAMIC = if (target.result.os.tag == .linux) "\"libudev.so.1\"" else "",
+            .SDL_PROCESS_DUMMY = emscripten, // MARK
             .SDL_PROCESS_POSIX = linux or macos,
             .SDL_PROCESS_WINDOWS = windows,
+            .SDL_PROCESS_PRIVATE = false, // MARK
+            .SDL_SENSOR_ANDROID = false, // MARK
+            .SDL_SENSOR_COREMOTION = false, // MARK
             .SDL_SENSOR_WINDOWS = windows,
             .SDL_SENSOR_DUMMY = linux or macos,
-            .SDL_LOADSO_DLOPEN = linux or macos,
+            .SDL_SENSOR_VITA = false, // MARK
+            .SDL_SENSOR_N3DS = false, // MARK
+            .SDL_SENSOR_EMSCRIPTEN = emscripten, // MARK
+            .SDL_SENSOR_PRIVATE = false, // MARK
+            .SDL_LOADSO_DLOPEN = linux or macos or emscripten,
+            .SDL_LOADSO_DUMMY = false, // MARK
             .SDL_LOADSO_WINDOWS = windows,
+            .SDL_LOADSO_PRIVATE = false, // MARK
             .SDL_THREAD_GENERIC_COND_SUFFIX = windows,
             .SDL_THREAD_GENERIC_RWLOCK_SUFFIX = windows,
-            .SDL_THREAD_PTHREAD = linux or macos,
-            .SDL_THREAD_PTHREAD_RECURSIVE_MUTEX = linux or macos,
+            .SDL_THREAD_PTHREAD = linux or macos or (emscripten and emscripten_pthreads),
+            .SDL_THREAD_PTHREAD_RECURSIVE_MUTEX = linux or macos or (emscripten and emscripten_pthreads),
+            .SDL_THREAD_PTHREAD_RECURSIVE_MUTEX_NP = false, // MARK
             .SDL_THREAD_WINDOWS = windows,
-            .SDL_TIME_UNIX = linux or macos,
+            .SDL_THREAD_VITA = false, // MARK
+            .SDL_THREAD_PSP = false, // MARK
+            .SDL_THREAD_PS2 = false, // MARK
+            .SDL_THREAD_N3DS = false, // MARK
+            .SDL_THREAD_PRIVATE = false, // MARK
+            .SDL_TIME_UNIX = linux or macos or emscripten,
             .SDL_TIME_WINDOWS = windows,
-            .SDL_TIMER_UNIX = linux or macos,
+            .SDL_TIME_VITA = false, // MARK
+            .SDL_TIME_PSP = false, // MARK
+            .SDL_TIME_PS2 = false, // MARK
+            .SDL_TIME_N3DS = false, // MARK
+            .SDL_TIME_NGAGE = false, // MARK
+            .SDL_TIME_PRIVATE = false, // MARK
+            .SDL_TIMER_HAIKU = false, // MARK
+            .SDL_TIMER_UNIX = linux or macos or emscripten,
             .SDL_TIMER_WINDOWS = windows,
+            .SDL_TIMER_VITA = false, // MARK
+            .SDL_TIMER_PSP = false, // MARK
+            .SDL_TIMER_PS2 = false, // MARK
+            .SDL_TIMER_N3DS = false, // MARK
+            .SDL_TIMER_PRIVATE = false, // MARK
+            .SDL_VIDEO_DRIVER_ANDROID = false, // MARK
             .SDL_VIDEO_DRIVER_COCOA = macos,
-            .SDL_VIDEO_DRIVER_DUMMY = true,
-            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC = "",
-            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM = "",
-            .SDL_VIDEO_DRIVER_OFFSCREEN = linux or macos or windows,
-            .SDL_VIDEO_DRIVER_WAYLAND = linux and options.wayland,
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC = if (linux and options.wayland) "\"libwayland-client.so.0\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_CURSOR = if (linux and options.wayland) "\"libwayland-cursor.so.0\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_EGL = if (linux and options.wayland) "\"libwayland-egl.so.1\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR = "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_XKBCOMMON = if (linux and options.wayland) "\"libxkbcommon.so.0\"" else "",
+            .SDL_VIDEO_DRIVER_DUMMY = windows or linux or macos or emscripten,
+            .SDL_VIDEO_DRIVER_EMSCRIPTEN = emscripten, // MARK
+            .SDL_VIDEO_DRIVER_HAIKU = false, // MARK
+            .SDL_VIDEO_DRIVER_KMSDRM = linux, // MARK
+            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC = if (target.result.os.tag == .linux) "\"libdrm.so.2\"" else "",
+            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM = if (target.result.os.tag == .linux) "\"libgbm.so.1\"" else "",
+            .SDL_VIDEO_DRIVER_N3DS = false, // MARK65
+            .SDL_VIDEO_DRIVER_NGAGE = false, // MARK65
+            .SDL_VIDEO_DRIVER_OFFSCREEN = windows or linux or macos or emscripten,
+            .SDL_VIDEO_DRIVER_PS2 = false, // MARK
+            .SDL_VIDEO_DRIVER_PSP = false, // MARK
+            .SDL_VIDEO_DRIVER_RISCOS = false, // MARK
+            .SDL_VIDEO_DRIVER_ROCKCHIP = false, // MARK
+            .SDL_VIDEO_DRIVER_RPI = false, // MARK
+            .SDL_VIDEO_DRIVER_UIKIT = false, // MARK
+            .SDL_VIDEO_DRIVER_VITA = false, // MARK
+            .SDL_VIDEO_DRIVER_VIVANTE = false, // MARK
+            .SDL_VIDEO_DRIVER_VIVANTE_VDK = false, // MARK
+            .SDL_VIDEO_DRIVER_OPENVR = false, // MARK
+            .SDL_VIDEO_DRIVER_WAYLAND = linux,
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC = if (target.result.os.tag == .linux) "\"libwayland-client.so.0\"" else "",
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_CURSOR = if (target.result.os.tag == .linux) "\"libwayland-cursor.so.0\"" else "",
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_EGL = if (target.result.os.tag == .linux) "\"libwayland-egl.so.1\"" else "",
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR = if (target.result.os.tag == .linux) "\"libdecor-0.so.0\"" else "",
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_XKBCOMMON = if (target.result.os.tag == .linux) "\"libxkbcommon.so.0\"" else "",
             .SDL_VIDEO_DRIVER_WINDOWS = windows,
-            .SDL_VIDEO_DRIVER_X11 = linux and options.x11,
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC = if (linux and options.x11) "\"libX11.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XCURSOR = if (linux and options.x11) "\"libXcursor.so.1\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XEXT = if (linux and options.x11) "\"libXext.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XFIXES = if (linux and options.x11) "\"libXfixes.so.3\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XINPUT2 = if (linux and options.x11) "\"libXi.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XRANDR = if (linux and options.x11) "\"libXrandr.so.2\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XSS = if (linux and options.x11) "\"libXss.so.1\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XTEST = if (linux and options.x11) "\"libXtst.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_XINPUT2_SUPPORTS_GESTURE = false,
-            .SDL_VIDEO_RENDER_GPU = linux or macos or windows,
-            .SDL_VIDEO_RENDER_VULKAN = options.vulkan and (linux or macos or windows),
-            .SDL_VIDEO_RENDER_OGL = options.opengl and (linux or macos or windows),
-            .SDL_VIDEO_OPENGL = options.opengl and (linux or macos or windows),
-            .SDL_VIDEO_OPENGL_GLX = linux and options.opengl and options.x11,
-            .SDL_VIDEO_OPENGL_EGL = options.opengl and (linux or macos or windows),
-            .SDL_VIDEO_VULKAN = options.vulkan and (linux or macos or windows),
+            .SDL_VIDEO_DRIVER_X11 = linux,
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC = if (target.result.os.tag == .linux) "\"libX11.so.6\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XCURSOR = if (target.result.os.tag == .linux) "\"libXcursor.so.1\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XEXT = if (target.result.os.tag == .linux) "\"libXext.so.6\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XFIXES = if (target.result.os.tag == .linux) "\"libXfixes.so.3\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XINPUT2 = if (target.result.os.tag == .linux) "\"libXi.so.6\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XRANDR = if (target.result.os.tag == .linux) "\"libXrandr.so.2\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XSS = if (target.result.os.tag == .linux) "\"libXss.so.1\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XTEST = if (target.result.os.tag == .linux) "\"libXtst.so.6\"" else "",
+            .SDL_VIDEO_DRIVER_X11_HAS_XKBLIB = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_SUPPORTS_GENERIC_EVENTS = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XCURSOR = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XDBE = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XFIXES = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XINPUT2 = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XINPUT2_SUPPORTS_MULTITOUCH = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XINPUT2_SUPPORTS_SCROLLINFO = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XINPUT2_SUPPORTS_GESTURE = linux,
+            .SDL_VIDEO_DRIVER_X11_XRANDR = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XSCRNSAVER = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XSHAPE = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XSYNC = linux, // MARK
+            .SDL_VIDEO_DRIVER_X11_XTEST = linux, // MARK
+            .SDL_VIDEO_DRIVER_QNX = false, // MARK
+            .SDL_VIDEO_DRIVER_PRIVATE = false, // MARK
+            .SDL_VIDEO_RENDER_D3D = windows, // MARK
+            .SDL_VIDEO_RENDER_D3D11 = windows, // MARK
+            .SDL_VIDEO_RENDER_D3D12 = windows, // MARK
+            .SDL_VIDEO_RENDER_GPU = windows or linux or macos,
+            .SDL_VIDEO_RENDER_METAL = macos, // MARK
+            .SDL_VIDEO_RENDER_VULKAN = windows or linux or macos,
+            .SDL_VIDEO_RENDER_OGL = windows or linux or macos,
+            .SDL_VIDEO_RENDER_OGL_ES2 = windows or linux or macos or emscripten, // MARK
+            .SDL_VIDEO_RENDER_NGAGE = false, // MARK
+            .SDL_VIDEO_RENDER_PS2 = false, // MARK
+            .SDL_VIDEO_RENDER_PSP = false, // MARK
+            .SDL_VIDEO_RENDER_VITA_GXM = false, // MARK
+            .SDL_VIDEO_RENDER_PRIVATE = false, // MARK
+            .SDL_VIDEO_OPENGL = windows or linux or macos,
+            .SDL_VIDEO_OPENGL_ES = linux, // MARK
+            .SDL_VIDEO_OPENGL_ES2 = windows or linux or macos or emscripten, // MARK
+            .SDL_VIDEO_OPENGL_CGL = macos, // MARK
+            .SDL_VIDEO_OPENGL_GLX = linux,
+            .SDL_VIDEO_OPENGL_WGL = windows, // MARK
+            .SDL_VIDEO_OPENGL_EGL = windows or linux or macos,
+            .SDL_VIDEO_STATIC_ANGLE = false, // MARK
+            .SDL_VIDEO_VULKAN = windows or linux or macos,
+            .SDL_VIDEO_METAL = macos, // MARK
+            .SDL_GPU_D3D11 = false, // MARK
+            .SDL_GPU_D3D12 = windows, // MARK
+            .SDL_GPU_VULKAN = windows or linux or macos, // MARK
+            .SDL_GPU_METAL = macos, // MARK
+            .SDL_GPU_PRIVATE = false, // MARK
+            .SDL_POWER_ANDROID = false, // MARK
             .SDL_POWER_LINUX = linux,
             .SDL_POWER_WINDOWS = windows,
             .SDL_POWER_MACOSX = macos,
-            .SDL_FILESYSTEM_UNIX = linux or macos,
+            .SDL_POWER_UIKIT = false, // MARK
+            .SDL_POWER_HAIKU = false, // MARK
+            .SDL_POWER_EMSCRIPTEN = emscripten, // MARK
+            .SDL_POWER_HARDWIRED = false, // MARK
+            .SDL_POWER_VITA = false, // MARK
+            .SDL_POWER_PSP = false, // MARK
+            .SDL_POWER_N3DS = false, // MARK
+            .SDL_POWER_PRIVATE = false, // MARK
+            .SDL_FILESYSTEM_ANDROID = false, // MARK
+            .SDL_FILESYSTEM_HAIKU = false, // MARK
+            .SDL_FILESYSTEM_COCOA = macos, // MARK
+            .SDL_FILESYSTEM_DUMMY = false, // MARK
+            .SDL_FILESYSTEM_RISCOS = false, // MARK
+            .SDL_FILESYSTEM_UNIX = linux,
             .SDL_FILESYSTEM_WINDOWS = windows,
-            .SDL_STORAGE_STEAM = linux or macos or windows,
-            .SDL_FSOPS_POSIX = linux or macos,
+            .SDL_FILESYSTEM_EMSCRIPTEN = emscripten, // MARK
+            .SDL_FILESYSTEM_VITA = false, // MARK
+            .SDL_FILESYSTEM_PSP = false, // MARK
+            .SDL_FILESYSTEM_PS2 = false, // MARK
+            .SDL_FILESYSTEM_N3DS = false, // MARK
+            .SDL_FILESYSTEM_PRIVATE = false, // MARK
+            .SDL_STORAGE_STEAM = windows or linux or macos,
+            .SDL_STORAGE_PRIVATE = false, // MARK
+            .SDL_FSOPS_POSIX = linux or macos or emscripten,
             .SDL_FSOPS_WINDOWS = windows,
-            .SDL_CAMERA_DRIVER_DUMMY = true,
+            .SDL_FSOPS_DUMMY = false, // MARK
+            .SDL_FSOPS_PRIVATE = false, // MARK
+            .SDL_CAMERA_DRIVER_DUMMY = windows or linux or macos or emscripten,
             .SDL_CAMERA_DRIVER_V4L2 = linux,
-            .SDL_CAMERA_DRIVER_PIPEWIRE_DYNAMIC = "",
+            .SDL_CAMERA_DRIVER_COREMEDIA = macos, // MARK
+            .SDL_CAMERA_DRIVER_ANDROID = false, // MARK
+            .SDL_CAMERA_DRIVER_EMSCRIPTEN = emscripten, // MARK
+            .SDL_CAMERA_DRIVER_MEDIAFOUNDATION = windows, // MARK
+            .SDL_CAMERA_DRIVER_PIPEWIRE = linux, // MARK
+            .SDL_CAMERA_DRIVER_PIPEWIRE_DYNAMIC = if (target.result.os.tag == .linux) "\"libpipewire-0.3.so.0\"" else "",
+            .SDL_CAMERA_DRIVER_VITA = false, // MARK
+            .SDL_CAMERA_DRIVER_PRIVATE = false, // MARK
+            .SDL_DIALOG_DUMMY = false, // MARK
+            .SDL_TRAY_DUMMY = emscripten, // MARK
+            .SDL_ALTIVEC_BLITTERS = false, // MARK
+            .DYNAPI_NEEDS_DLOPEN = linux or macos or emscripten, // MARK
+            .SDL_USE_IME = linux, // MARK
+            .SDL_DISABLE_WINDOWS_IME = false, // MARK
+            .SDL_GDK_TEXTINPUT = false, // MARK
+            .SDL_IPHONE_KEYBOARD = false, // MARK
+            .SDL_IPHONE_LAUNCHSCREEN = false, // MARK
+            .SDL_VIDEO_VITA_PIB = false, // MARK
+            .SDL_VIDEO_VITA_PVR = false, // MARK
+            .SDL_VIDEO_VITA_PVR_OGL = false, // MARK
             .SDL_EMSCRIPTEN_PERSISTENT_PATH_STRING = null,
-            .SDL_XKBCOMMON_VERSION_MAJOR = if (linux and options.wayland) @as(i64, 1) else null,
-            .SDL_XKBCOMMON_VERSION_MINOR = if (linux and options.wayland) @as(i64, 6) else null,
-            .SDL_XKBCOMMON_VERSION_PATCH = if (linux and options.wayland) @as(i64, 0) else null,
-            .SDL_LIBDECOR_VERSION_MAJOR = 0,
-            .SDL_LIBDECOR_VERSION_MINOR = 0,
-            .SDL_LIBDECOR_VERSION_PATCH = 0,
-            .SDL_DISABLE_SSE = false,
-            .SDL_DISABLE_SSE2 = false,
-            .SDL_DISABLE_SSE3 = false,
-            .SDL_DISABLE_SSE4_1 = false,
-            .SDL_DISABLE_SSE4_2 = false,
-            .SDL_DISABLE_AVX = false,
-            .SDL_DISABLE_AVX2 = false,
-            .SDL_DISABLE_AVX512F = false,
-            .SDL_DISABLE_MMX = false,
-            .SDL_DISABLE_NEON = false,
+            // Temporarily set to a lower version as >= 1.10.0 is not yet widely available.
+            // TODO: Uncomment after Ubuntu 26.04 LTS has been released?
+            .SDL_XKBCOMMON_VERSION_MAJOR = @as(i64, 1),
+            .SDL_XKBCOMMON_VERSION_MINOR = @as(i64, 6),
+            .SDL_XKBCOMMON_VERSION_PATCH = @as(i64, 0),
+            //.SDL_XKBCOMMON_VERSION_MAJOR = if (linux_deps_values) |x| @as(i64, @intCast(x.xkbcommon_version.major)) else null,
+            //.SDL_XKBCOMMON_VERSION_MINOR = if (linux_deps_values) |x| @as(i64, @intCast(x.xkbcommon_version.major)) else null,
+            //.SDL_XKBCOMMON_VERSION_PATCH = if (linux_deps_values) |x| @as(i64, @intCast(x.xkbcommon_version.major)) else null,
+            .SDL_LIBDECOR_VERSION_MAJOR = @as(i64, 0),
+            .SDL_LIBDECOR_VERSION_MINOR = @as(i64, 2),
+            .SDL_LIBDECOR_VERSION_PATCH = @as(i64, 5),
+            .SDL_DISABLE_SSE = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse)),
+            .SDL_DISABLE_SSE2 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse2)),
+            .SDL_DISABLE_SSE3 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse3)),
+            .SDL_DISABLE_SSE4_1 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse4_1)),
+            .SDL_DISABLE_SSE4_2 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse4_2)),
+            .SDL_DISABLE_AVX = !(x86 and std.Target.x86.featureSetHas(cpu.features, .avx)),
+            .SDL_DISABLE_AVX2 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .avx2)),
+            .SDL_DISABLE_AVX512F = !(x86 and std.Target.x86.featureSetHas(cpu.features, .avx512f)),
+            .SDL_DISABLE_MMX = !(x86 and std.Target.x86.featureSetHas(cpu.features, .mmx)),
+            .SDL_DISABLE_LSX = !(loongarch and std.Target.loongarch.featureSetHas(cpu.features, .lsx)), // MARK
+            .SDL_DISABLE_LASX = !(loongarch and std.Target.loongarch.featureSetHas(cpu.features, .lasx)), // MARK
+            .SDL_DISABLE_NEON = !(arm and std.Target.arm.featureSetHas(cpu.features, .neon) or aarch64 and std.Target.aarch64.featureSetHas(cpu.features, .neon)),
         });
     };
 
@@ -335,7 +607,7 @@ pub fn build(b: *std.Build) void {
         },
         .use_llvm = if (emscripten) true else null,
     });
-        sdl_lib.lto = lto;
+    sdl_lib.lto = lto;
 
     module.addCMacro("USING_GENERATED_CONFIG_H", "1");
     module.addCMacro("SDL_BUILD_MAJOR_VERSION", std.fmt.comptimePrint("{d}", .{ parsed_version.major }));
@@ -399,26 +671,6 @@ pub fn build(b: *std.Build) void {
         cflags.append(b.allocator, "-pthread");
     }
 
-    pkgconfig_link: {
-        if (target.result.os.tag != .linux) break :pkgconfig_link;
-        if (options.x11) {
-            pkgConfig(b, module, "x11");
-            pkgConfig(b, module, "xcursor");
-            pkgConfig(b, module, "xext");
-            pkgConfig(b, module, "xfixes");
-            pkgConfig(b, module, "xi");
-            pkgConfig(b, module, "xrandr");
-            pkgConfig(b, module, "xss");
-            pkgConfig(b, module, "xtst");
-        }
-        if (options.wayland) {
-            pkgConfig(b, module, "wayland-client");
-            pkgConfig(b, module, "wayland-cursor");
-            pkgConfig(b, module, "wayland-egl");
-            pkgConfig(b, module, "xkbcommon");
-        }
-    }
-
     addPlatformSources(
         b,
         module,
@@ -438,29 +690,34 @@ pub fn build(b: *std.Build) void {
         cflags.items,
     );
 
-    const lib = b.addLibrary(.{
-        .name = "SDL3",
-        .linkage = preferred_linkage,
-        .root_module = module,
-    });
-    b.installArtifact(lib);
+    const install_sdl_lib = b.addInstallArtifact(sdl_lib, .{});
 
-    const wrapper = b.path("src/sdl_wrapper.h");
+    const install_sdl = b.step("install_sdl", "Install SDL");
+    install_sdl.dependOn(&install_sdl_lib.step);
+
+    b.getInstallStep().dependOn(&install_sdl_lib.step);
+
+    // const sdl_translate_c = b.addTranslateC(.{
+    //     .root_source_file = sdl_dep.path("include/SDL3/SDL.h"),
+    //     .target = target,
+    //     .optimize = optimize,
+    //     .link_libc = true,
+    // });
+
+    // sdl_translate_c.addIncludePath(sdl_dep.path("include"));
+
+    // _ = sdl_translate_c.addModule("sdl");
+
     const translate = b.addTranslateC(.{
-        .root_source_file = wrapper,
+        .root_source_file = sdl_dep.path("include/SDL3/SDL.h"),
         .target = target,
         .optimize = optimize,
     });
     translate.addIncludePath(include);
     translate.addConfigHeader(build_config_h);
     translate.addConfigHeader(revision);
-    _ = translate.createModule();
-    _ = b.addModule("sdl", .{ .root_source_file = translate.getOutput(), .target = target, .optimize = optimize });
-
-    // Keep the package useful as a standalone smoke-test package too.
-    const test_step = b.step("test", "Build the SDL library and translated API");
-    test_step.dependOn(&lib.step);
-    test_step.dependOn(&translate.step);
+    // _ = translate.createModule();
+    _ = translate.addModule("sdl");
 }
 
 fn pkgConfig(b: *std.Build, module: *std.Build.Module, name: []const u8) void {
@@ -716,7 +973,19 @@ fn addPlatformSources(
 
     switch (platform.target.result.os.tag) {
         .linux => {
-            const wayland_protocols_lazypath = platform.sdl_dep.path("wayland-protocols");
+            pkgConfig(b, module, "x11");
+            pkgConfig(b, module, "xcursor");
+            pkgConfig(b, module, "xext");
+            pkgConfig(b, module, "xfixes");
+            pkgConfig(b, module, "xi");
+            pkgConfig(b, module, "xrandr");
+            pkgConfig(b, module, "xss");
+            pkgConfig(b, module, "xtst");
+            pkgConfig(b, module, "wayland-client");
+            pkgConfig(b, module, "wayland-cursor");
+            pkgConfig(b, module, "wayland-egl");
+            pkgConfig(b, module, "xkbcommon");
+
             module.addCSourceFiles(.{
                 .root = source_lazypath,
                 .flags = cflags.items,
@@ -862,9 +1131,9 @@ fn addPlatformSources(
             });
 
             const io = b.graph.io;
-            const dir = try wayland_protocols_lazypath
-                            .getPath4(b, null)
-                            .openDir(io, "", .{ .iterate = true });
+            const wayland_protocols_lazypath = platform.sdl_dep.path("wayland-protocols");
+            const wayland_protocols_path = try wayland_protocols_lazypath.getPath4(b, null);
+            const dir = try wayland_protocols_path.openDir(io, "", .{ .iterate = true });
             defer dir.close(io);
 
             var iterator = dir.iterate();
