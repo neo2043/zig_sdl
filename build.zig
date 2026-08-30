@@ -9,11 +9,7 @@ pub fn build(b: *std.Build) !void {
     const sdl_include = sdl_dep.path("include");
     const sdl_source = sdl_dep.path("src");
 
-    const preferred_linkage = b.option(
-        std.builtin.LinkMode,
-        "preferred_linkage",
-        "SDL linkage"
-    ) orelse .static;
+    const preferred_linkage = b.option(std.builtin.LinkMode, "preferred_linkage", "SDL linkage") orelse .static;
     const strip = b.option(
         bool,
         "strip",
@@ -59,9 +55,46 @@ pub fn build(b: *std.Build) !void {
         "build_config_h_overrides",
         "Override 'SDL_build_config.h' entries (e.g. '-DHAVE_SIN=1', '-UHAVE_COS')",
     );
+    
+    const pkg_config_exe = b.option(
+        []const u8,
+        "pkg_config",
+        "pkg-config executable"
+    ) orelse b.graph.environ_map.get("PKG_CONFIG") orelse "pkg-config";
+
+    const pkg_config_sysroot_dir = b.option(
+        []const u8,
+        "pkg_config_sysroot_dir",
+        "Target sysroot used by pkg-config"
+    ) orelse b.graph.environ_map.get("PKG_CONFIG_SYSROOT_DIR");
+
+    const pkg_config_libdir = b.option(
+        []const u8,
+        "pkg_config_libdir",
+        "Target pkg-config search path"
+    ) orelse b.graph.environ_map.get("PKG_CONFIG_LIBDIR");
+
+    const wayland_scanner = b.option(
+        []const u8,
+        "wayland_scanner",
+        "wayland-scanner executable"
+    ) orelse "wayland-scanner";
+
+    const readelf = b.option(
+        []const u8,
+        "readelf",
+        "readelf executable used to inspect target SONAMEs"
+    ) orelse "readelf";
+    
+    const soname_overrides = b.option(
+        []const []const u8,
+        "soname_overrides",
+        "Override discovered SONAMEs (e.g. 'x11=libX11.so.6')",
+    );
 
     var windows = false;
     var linux = false;
+    var linux_deps: ?LinuxDeps = null;
     var macos = false;
     var emscripten = false;
     var msvc = false; // Assume mingw-w64 as the default for Windows
@@ -74,6 +107,14 @@ pub fn build(b: *std.Build) !void {
         .linux => {
             linux = true;
             musl = target.result.abi.isMusl();
+            linux_deps = discoverLinuxDeps(b, target, .{
+                .pkg_config_exe = pkg_config_exe,
+                .pkg_config_sysroot_dir = pkg_config_sysroot_dir,
+                .pkg_config_libdir = pkg_config_libdir,
+                .wayland_scanner = wayland_scanner,
+                .readelf = readelf,
+                .soname_overrides = soname_overrides,
+            });
         },
         .macos => {
             macos = true;
@@ -280,9 +321,9 @@ pub fn build(b: *std.Build) !void {
             .HAVE_LIBDECOR_H = linux,
             .HAVE_LIBURING_H = linux,
             .HAVE_FRIBIDI_H = linux,
-            .SDL_FRIBIDI_DYNAMIC = if (target.result.os.tag == .linux) "\"libfribidi.so.0\"" else "",
+            .SDL_FRIBIDI_DYNAMIC = sonameValue(b, linux_deps, "fribidi"),
             .HAVE_LIBTHAI_H = linux,
-            .SDL_LIBTHAI_DYNAMIC = if (target.result.os.tag == .linux) "\"libthai.so.0\"" else "",
+            .SDL_LIBTHAI_DYNAMIC = sonameValue(b, linux_deps, "thai"),
             .HAVE_DDRAW_H = windows,
             .HAVE_DSOUND_H = windows,
             .HAVE_DINPUT_H = windows,
@@ -315,7 +356,7 @@ pub fn build(b: *std.Build) !void {
             .SDL_DIALOG_DISABLED = false,
             .SDL_THREADS_DISABLED = (emscripten and !emscripten_pthreads),
             .SDL_AUDIO_DRIVER_ALSA = linux,
-            .SDL_AUDIO_DRIVER_ALSA_DYNAMIC = if (target.result.os.tag == .linux) "\"libasound.so.2\"" else "",
+            .SDL_AUDIO_DRIVER_ALSA_DYNAMIC = sonameValue(b, linux_deps, "asound"),
             .SDL_AUDIO_DRIVER_OPENSLES = false,
             .SDL_AUDIO_DRIVER_AAUDIO = false,
             .SDL_AUDIO_DRIVER_COREAUDIO = macos,
@@ -325,15 +366,15 @@ pub fn build(b: *std.Build) !void {
             .SDL_AUDIO_DRIVER_EMSCRIPTEN = emscripten,
             .SDL_AUDIO_DRIVER_HAIKU = false,
             .SDL_AUDIO_DRIVER_JACK = linux,
-            .SDL_AUDIO_DRIVER_JACK_DYNAMIC = if (target.result.os.tag == .linux) "\"libjack.so.0\"" else "",
+            .SDL_AUDIO_DRIVER_JACK_DYNAMIC = sonameValue(b, linux_deps, "jack"),
             .SDL_AUDIO_DRIVER_NETBSD = false,
             .SDL_AUDIO_DRIVER_OSS = false,
             .SDL_AUDIO_DRIVER_PIPEWIRE = linux,
-            .SDL_AUDIO_DRIVER_PIPEWIRE_DYNAMIC = if (target.result.os.tag == .linux) "\"libpipewire-0.3.so.0\"" else "",
+            .SDL_AUDIO_DRIVER_PIPEWIRE_DYNAMIC = sonameValue(b, linux_deps, "pipewire-0.3"),
             .SDL_AUDIO_DRIVER_PULSEAUDIO = linux,
-            .SDL_AUDIO_DRIVER_PULSEAUDIO_DYNAMIC = if (target.result.os.tag == .linux) "\"libpulse.so.0\"" else "",
+            .SDL_AUDIO_DRIVER_PULSEAUDIO_DYNAMIC = sonameValue(b, linux_deps, "pulse"),
             .SDL_AUDIO_DRIVER_SNDIO = linux,
-            .SDL_AUDIO_DRIVER_SNDIO_DYNAMIC = if (target.result.os.tag == .linux) "\"libsndio.so.7\"" else "",
+            .SDL_AUDIO_DRIVER_SNDIO_DYNAMIC = sonameValue(b, linux_deps, "sndio"),
             .SDL_AUDIO_DRIVER_WASAPI = windows,
             .SDL_AUDIO_DRIVER_VITA = false,
             .SDL_AUDIO_DRIVER_PSP = false,
@@ -373,8 +414,8 @@ pub fn build(b: *std.Build) !void {
             .SDL_HAPTIC_DINPUT = windows,
             .SDL_HAPTIC_ANDROID = false,
             .SDL_HAPTIC_PRIVATE = false,
-            .SDL_LIBUSB_DYNAMIC = if (target.result.os.tag == .linux) "\"libusb-1.0.so.0\"" else "",
-            .SDL_UDEV_DYNAMIC = if (target.result.os.tag == .linux) "\"libudev.so.1\"" else "",
+            .SDL_LIBUSB_DYNAMIC = sonameValue(b, linux_deps, "usb-1.0"),
+            .SDL_UDEV_DYNAMIC = sonameValue(b, linux_deps, "udev"),
             .SDL_PROCESS_DUMMY = emscripten,
             .SDL_PROCESS_POSIX = linux or macos,
             .SDL_PROCESS_WINDOWS = windows,
@@ -424,8 +465,8 @@ pub fn build(b: *std.Build) !void {
             .SDL_VIDEO_DRIVER_EMSCRIPTEN = emscripten,
             .SDL_VIDEO_DRIVER_HAIKU = false,
             .SDL_VIDEO_DRIVER_KMSDRM = linux,
-            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC = if (target.result.os.tag == .linux) "\"libdrm.so.2\"" else "",
-            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM = if (target.result.os.tag == .linux) "\"libgbm.so.1\"" else "",
+            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC = sonameValue(b, linux_deps, "drm"),
+            .SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM = sonameValue(b, linux_deps, "gbm"),
             .SDL_VIDEO_DRIVER_N3DS = false,
             .SDL_VIDEO_DRIVER_NGAGE = false,
             .SDL_VIDEO_DRIVER_OFFSCREEN = windows or linux or macos or emscripten,
@@ -440,21 +481,21 @@ pub fn build(b: *std.Build) !void {
             .SDL_VIDEO_DRIVER_VIVANTE_VDK = false,
             .SDL_VIDEO_DRIVER_OPENVR = false,
             .SDL_VIDEO_DRIVER_WAYLAND = linux,
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC = if (target.result.os.tag == .linux) "\"libwayland-client.so.0\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_CURSOR = if (target.result.os.tag == .linux) "\"libwayland-cursor.so.0\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_EGL = if (target.result.os.tag == .linux) "\"libwayland-egl.so.1\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR = if (target.result.os.tag == .linux) "\"libdecor-0.so.0\"" else "",
-            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_XKBCOMMON = if (target.result.os.tag == .linux) "\"libxkbcommon.so.0\"" else "",
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC = sonameValue(b, linux_deps, "wayland-client"),
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_CURSOR = sonameValue(b, linux_deps, "wayland-cursor"),
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_EGL = sonameValue(b, linux_deps, "wayland-egl"),
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR = sonameValue(b, linux_deps, "decor-0"),
+            .SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_XKBCOMMON = sonameValue(b, linux_deps, "xkbcommon"),
             .SDL_VIDEO_DRIVER_WINDOWS = windows,
             .SDL_VIDEO_DRIVER_X11 = linux,
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC = if (target.result.os.tag == .linux) "\"libX11.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XCURSOR = if (target.result.os.tag == .linux) "\"libXcursor.so.1\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XEXT = if (target.result.os.tag == .linux) "\"libXext.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XFIXES = if (target.result.os.tag == .linux) "\"libXfixes.so.3\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XINPUT2 = if (target.result.os.tag == .linux) "\"libXi.so.6\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XRANDR = if (target.result.os.tag == .linux) "\"libXrandr.so.2\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XSS = if (target.result.os.tag == .linux) "\"libXss.so.1\"" else "",
-            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XTEST = if (target.result.os.tag == .linux) "\"libXtst.so.6\"" else "",
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC = sonameValue(b, linux_deps, "X11"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XCURSOR = sonameValue(b, linux_deps, "Xcursor"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XEXT = sonameValue(b, linux_deps, "Xext"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XFIXES = sonameValue(b, linux_deps, "Xfixes"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XINPUT2 = sonameValue(b, linux_deps, "Xi"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XRANDR = sonameValue(b, linux_deps, "Xrandr"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XSS = sonameValue(b, linux_deps, "Xss"),
+            .SDL_VIDEO_DRIVER_X11_DYNAMIC_XTEST = sonameValue(b, linux_deps, "Xtst"),
             .SDL_VIDEO_DRIVER_X11_HAS_XKBLIB = linux,
             .SDL_VIDEO_DRIVER_X11_SUPPORTS_GENERIC_EVENTS = linux,
             .SDL_VIDEO_DRIVER_X11_XCURSOR = linux,
@@ -537,7 +578,7 @@ pub fn build(b: *std.Build) !void {
             .SDL_CAMERA_DRIVER_EMSCRIPTEN = emscripten,
             .SDL_CAMERA_DRIVER_MEDIAFOUNDATION = windows,
             .SDL_CAMERA_DRIVER_PIPEWIRE = linux,
-            .SDL_CAMERA_DRIVER_PIPEWIRE_DYNAMIC = if (target.result.os.tag == .linux) "\"libpipewire-0.3.so.0\"" else "",
+            .SDL_CAMERA_DRIVER_PIPEWIRE_DYNAMIC = sonameValue(b, linux_deps, "pipewire-0.3"),
             .SDL_CAMERA_DRIVER_VITA = false,
             .SDL_CAMERA_DRIVER_PRIVATE = false,
             .SDL_DIALOG_DUMMY = false,
@@ -553,17 +594,12 @@ pub fn build(b: *std.Build) !void {
             .SDL_VIDEO_VITA_PVR = false,
             .SDL_VIDEO_VITA_PVR_OGL = false,
             .SDL_EMSCRIPTEN_PERSISTENT_PATH_STRING = null,
-            // Temporarily set to a lower version as >= 1.10.0 is not yet widely available.
-            // TODO: Uncomment after Ubuntu 26.04 LTS has been released?
-            .SDL_XKBCOMMON_VERSION_MAJOR = @as(i64, 1),
-            .SDL_XKBCOMMON_VERSION_MINOR = @as(i64, 6),
-            .SDL_XKBCOMMON_VERSION_PATCH = @as(i64, 0),
-            //.SDL_XKBCOMMON_VERSION_MAJOR = if (linux_deps_values) |x| @as(i64, @intCast(x.xkbcommon_version.major)) else null,
-            //.SDL_XKBCOMMON_VERSION_MINOR = if (linux_deps_values) |x| @as(i64, @intCast(x.xkbcommon_version.major)) else null,
-            //.SDL_XKBCOMMON_VERSION_PATCH = if (linux_deps_values) |x| @as(i64, @intCast(x.xkbcommon_version.major)) else null,
-            .SDL_LIBDECOR_VERSION_MAJOR = @as(i64, 0),
-            .SDL_LIBDECOR_VERSION_MINOR = @as(i64, 2),
-            .SDL_LIBDECOR_VERSION_PATCH = @as(i64, 5),
+            .SDL_XKBCOMMON_VERSION_MAJOR = versionComponent(linux_deps, .xkbcommon, .major),
+            .SDL_XKBCOMMON_VERSION_MINOR = versionComponent(linux_deps, .xkbcommon, .minor),
+            .SDL_XKBCOMMON_VERSION_PATCH = versionComponent(linux_deps, .xkbcommon, .patch),
+            .SDL_LIBDECOR_VERSION_MAJOR = versionComponent(linux_deps, .libdecor, .major),
+            .SDL_LIBDECOR_VERSION_MINOR = versionComponent(linux_deps, .libdecor, .minor),
+            .SDL_LIBDECOR_VERSION_PATCH = versionComponent(linux_deps, .libdecor, .patch),
             .SDL_DISABLE_SSE = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse)),
             .SDL_DISABLE_SSE2 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse2)),
             .SDL_DISABLE_SSE3 = !(x86 and std.Target.x86.featureSetHas(cpu.features, .sse3)),
@@ -639,15 +675,20 @@ pub fn build(b: *std.Build) !void {
     }
 
     sdl_module.addCMacro("USING_GENERATED_CONFIG_H", "1");
-    sdl_module.addCMacro("SDL_BUILD_MAJOR_VERSION", std.fmt.comptimePrint("{d}", .{ parsed_version.major }));
-    sdl_module.addCMacro("SDL_BUILD_MINOR_VERSION", std.fmt.comptimePrint("{d}", .{ parsed_version.minor }));
-    sdl_module.addCMacro("SDL_BUILD_MICRO_VERSION", std.fmt.comptimePrint("{d}", .{ parsed_version.patch }));
+    sdl_module.addCMacro("SDL_BUILD_MAJOR_VERSION", b.fmt("{d}", .{ parsed_version.major }));
+    sdl_module.addCMacro("SDL_BUILD_MINOR_VERSION", b.fmt("{d}", .{ parsed_version.minor }));
+    sdl_module.addCMacro("SDL_BUILD_MICRO_VERSION", b.fmt("{d}", .{ parsed_version.patch }));
 
     sdl_module.addConfigHeader(build_config_h);
     sdl_module.addConfigHeader(revision);
     sdl_module.addIncludePath(sdl_include);
     sdl_module.addIncludePath(sdl_source);
     sdl_module.addSystemIncludePath(sdl_source.path(b, "video/khronos"));
+    if (linux_deps) |deps| {
+        for (deps.include_paths) |path| {
+            sdl_module.addSystemIncludePath(.{ .cwd_relative = path });
+        }
+    }
 
     if (target.result.os.tag == .linux) {
         sdl_module.linkSystemLibrary("m", .{});
@@ -683,21 +724,22 @@ pub fn build(b: *std.Build) !void {
         "-fno-strict-aliasing",
         "-Wshadow",
         "-Wno-unused-local-typedefs",
-        "-Wimplicit-fallthrough"
+        "-Wimplicit-fallthrough",
     }) catch @panic("out of memory");
 
     if (sdl_lib.linkage.? == .dynamic) {
-        cflags.append(b.allocator, "-fvisibility=hidden");
+        cflags.append(b.allocator, "-fvisibility=hidden") catch @panic("out of memory");
     }
     if (linux) {
-        cflags.append(b.allocator, "-pthread");
+        cflags.append(b.allocator, "-pthread") catch @panic("out of memory");
+        cflags.appendSlice(b.allocator, linux_deps.?.cflags) catch @panic("out of memory");
     }
     if (macos) {
-        cflags.append(b.allocator, "-pthread");
-        cflags.append(b.allocator, "-fobjc-arc");
+        cflags.append(b.allocator, "-pthread") catch @panic("out of memory");
+        cflags.append(b.allocator, "-fobjc-arc") catch @panic("out of memory");
     }
     if (emscripten and emscripten_pthreads) {
-        cflags.append(b.allocator, "-pthread");
+        cflags.append(b.allocator, "-pthread") catch @panic("out of memory");
     }
 
     addPlatformSources(
@@ -715,6 +757,7 @@ pub fn build(b: *std.Build) !void {
             .revision_configheader = revision,
             .sdl_dep = sdl_dep,
             .sdl_library = sdl_lib,
+            .linux_deps = if (linux) &linux_deps.? else null,
         },
         cflags.items,
     );
@@ -726,17 +769,6 @@ pub fn build(b: *std.Build) !void {
 
     b.getInstallStep().dependOn(&install_sdl_lib.step);
 
-    // const sdl_translate_c = b.addTranslateC(.{
-    //     .root_source_file = sdl_dep.path("include/SDL3/SDL.h"),
-    //     .target = target,
-    //     .optimize = optimize,
-    //     .link_libc = true,
-    // });
-
-    // sdl_translate_c.addIncludePath(sdl_dep.path("include"));
-
-    // _ = sdl_translate_c.addModule("sdl");
-
     const translate = b.addTranslateC(.{
         .root_source_file = sdl_dep.path("include/SDL3/SDL.h"),
         .target = target,
@@ -746,42 +778,408 @@ pub fn build(b: *std.Build) !void {
     translate.addIncludePath(sdl_include);
     translate.addConfigHeader(build_config_h);
     translate.addConfigHeader(revision);
-    // _ = translate.createModule();
     _ = translate.addModule("sdl");
 }
 
-fn pkgConfig(b: *std.Build, module: *std.Build.Module, name: []const u8) void {
-    const result = std.process.run(b.allocator, b.graph.io, .{ .argv = &.{ "pkg-config", "--cflags-only-I", name } }) catch @panic("pkg-config is required for Linux SDL builds");
-    defer b.allocator.free(result.stdout);
-    defer b.allocator.free(result.stderr);
-    if (result.term != .exited or result.term.exited != 0) @panic("required Linux SDL package was not found through pkg-config");
-    var it = std.mem.tokenizeAny(u8, result.stdout, " \r\n");
-    while (it.next()) |flag| {
-        if (std.mem.startsWith(u8, flag, "-I")) {
-            module.addSystemIncludePath(.{ .cwd_relative = flag[2..] });
+const LinuxDiscoveryOptions = struct {
+    pkg_config_exe: []const u8,
+    pkg_config_sysroot_dir: ?[]const u8,
+    pkg_config_libdir: ?[]const u8,
+    wayland_scanner: []const u8,
+    readelf: []const u8,
+    soname_overrides: ?[]const []const u8,
+};
+
+const Soname = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+const LinuxDeps = struct {
+    include_paths: []const []const u8,
+    cflags: []const []const u8,
+    sonames: []const Soname,
+    xkbcommon_version: std.SemanticVersion,
+    libdecor_version: std.SemanticVersion,
+    wayland_scanner: []const u8,
+    wayland_scanner_mode: []const u8,
+
+    fn soname(deps: LinuxDeps, key: []const u8) []const u8 {
+        for (deps.sonames) |entry| {
+            if (std.mem.eql(u8, entry.key, key)) return entry.value;
+        }
+        @panic("missing discovered SONAME");
+    }
+};
+
+const PkgSpec = struct {
+    name: []const u8,
+    requirement: ?[]const u8 = null,
+};
+
+const SonameSpec = struct {
+    key: []const u8,
+    package: []const u8,
+};
+
+fn discoverLinuxDeps(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    options: LinuxDiscoveryOptions,
+) LinuxDeps {
+    if (!target.query.isNative() and (options.pkg_config_sysroot_dir == null or options.pkg_config_libdir == null)) {
+        std.log.err("cross-compiling SDL for Linux requires '-Dpkg_config_sysroot_dir' and '-Dpkg_config_libdir' (or their PKG_CONFIG_* environment equivalents)", .{});
+        std.process.exit(1);
+    }
+
+    var environ = b.graph.environ_map.clone(b.allocator) catch @panic("out of memory");
+    defer environ.deinit();
+    environ.put("LC_ALL", "C") catch @panic("out of memory");
+    if (options.pkg_config_sysroot_dir) |value| {
+        environ.put("PKG_CONFIG_SYSROOT_DIR", value) catch @panic("out of memory");
+    }
+    if (options.pkg_config_libdir) |value| {
+        environ.put("PKG_CONFIG_LIBDIR", value) catch @panic("out of memory");
+        _ = environ.swapRemove("PKG_CONFIG_PATH");
+    }
+
+    const packages = [_]PkgSpec{
+        .{ .name = "x11" },
+        .{ .name = "xext" },
+        .{ .name = "xcursor" },
+        .{ .name = "xi" },
+        .{ .name = "xfixes" },
+        .{ .name = "xrandr" },
+        .{ .name = "xrender" },
+        .{ .name = "xscrnsaver" },
+        .{ .name = "xtst" },
+        .{ .name = "wayland-client", .requirement = "wayland-client >= 1.18" },
+        .{ .name = "wayland-egl" },
+        .{ .name = "wayland-cursor" },
+        .{ .name = "egl" },
+        .{ .name = "xkbcommon", .requirement = "xkbcommon >= 0.5.0" },
+        .{ .name = "libdecor-0" },
+        .{ .name = "alsa" },
+        .{ .name = "libpipewire-0.3", .requirement = "libpipewire-0.3 >= 0.3.44" },
+        .{ .name = "libpulse", .requirement = "libpulse >= 0.9.15" },
+        .{ .name = "jack" },
+        .{ .name = "sndio" },
+        .{ .name = "libdrm" },
+        .{ .name = "gbm" },
+        .{ .name = "fribidi" },
+        .{ .name = "libthai" },
+        .{ .name = "libusb-1.0", .requirement = "libusb-1.0 >= 1.0.16" },
+        .{ .name = "dbus-1" },
+        .{ .name = "ibus-1.0" },
+        .{ .name = "liburing-ffi" },
+        .{ .name = "libudev" },
+    };
+
+    var include_paths: std.ArrayList([]const u8) = .empty;
+    var cflags: std.ArrayList([]const u8) = .empty;
+
+    for (packages) |package| {
+        const spec = package.requirement orelse package.name;
+        runPkgConfigCheck(b, options.pkg_config_exe, &environ, package.name, spec);
+        const output = runCommand(b, &.{ options.pkg_config_exe, "--cflags", package.name }, &environ, package.name);
+        if (output.len == 0) {
+            continue;
+        }
+
+        var it = std.mem.splitScalar(u8, output, ' ');
+        while (it.next()) |flag| {
+            if (std.mem.startsWith(u8, flag, "-I") and flag.len > 2) {
+                appendUnique(b, &include_paths, flag[2..]);
+            } else {
+                appendUnique(b, &cflags, flag);
+            }
         }
     }
+
+    const xkbcommon_version = pkgConfigVersion(b, options.pkg_config_exe, &environ, "xkbcommon");
+    const libdecor_version = pkgConfigVersion(b, options.pkg_config_exe, &environ, "libdecor-0");
+    const scanner_version = pkgConfigVersion(b, options.pkg_config_exe, &environ, "wayland-scanner");
+
+    const scanner_mode = if (scanner_version.order(.{ .major = 1, .minor = 15, .patch = 0 }) == .lt)
+        "code"
+    else
+        "private-code";
+
+    const soname_specs = [_]SonameSpec{
+        .{ .key = "X11", .package = "x11" },
+        .{ .key = "Xext", .package = "xext" },
+        .{ .key = "Xcursor", .package = "xcursor" },
+        .{ .key = "Xi", .package = "xi" },
+        .{ .key = "Xfixes", .package = "xfixes" },
+        .{ .key = "Xrandr", .package = "xrandr" },
+        .{ .key = "Xss", .package = "xscrnsaver" },
+        .{ .key = "Xtst", .package = "xtst" },
+        .{ .key = "wayland-client", .package = "wayland-client" },
+        .{ .key = "wayland-cursor", .package = "wayland-cursor" },
+        .{ .key = "wayland-egl", .package = "wayland-egl" },
+        .{ .key = "xkbcommon", .package = "xkbcommon" },
+        .{ .key = "decor-0", .package = "libdecor-0" },
+        .{ .key = "asound", .package = "alsa" },
+        .{ .key = "pipewire-0.3", .package = "libpipewire-0.3" },
+        .{ .key = "pulse", .package = "libpulse" },
+        .{ .key = "jack", .package = "jack" },
+        .{ .key = "sndio", .package = "sndio" },
+        .{ .key = "drm", .package = "libdrm" },
+        .{ .key = "gbm", .package = "gbm" },
+        .{ .key = "fribidi", .package = "fribidi" },
+        .{ .key = "thai", .package = "libthai" },
+        .{ .key = "usb-1.0", .package = "libusb-1.0" },
+        .{ .key = "udev", .package = "libudev" },
+    };
+
+    var sonames: std.ArrayList(Soname) = .empty;
+    for (soname_specs) |spec| {
+        const value = sonameOverride(options.soname_overrides, spec.key) orelse discoverSoname(
+            b,
+            options.pkg_config_exe,
+            options.readelf,
+            options.pkg_config_sysroot_dir,
+            &environ,
+            spec,
+        );
+        validateSoname(spec.key, value);
+        sonames.append(b.allocator, .{ .key = spec.key, .value = value }) catch @panic("out of memory");
+    }
+
+    return .{
+        .include_paths = include_paths.toOwnedSlice(b.allocator) catch @panic("out of memory"),
+        .cflags = cflags.toOwnedSlice(b.allocator) catch @panic("out of memory"),
+        .sonames = sonames.toOwnedSlice(b.allocator) catch @panic("out of memory"),
+        .xkbcommon_version = xkbcommon_version,
+        .libdecor_version = libdecor_version,
+        .wayland_scanner = options.wayland_scanner,
+        .wayland_scanner_mode = scanner_mode,
+    };
+}
+
+fn runPkgConfigCheck(
+    b: *std.Build,
+    executable: []const u8,
+    environ: *const std.process.Environ.Map,
+    package: []const u8,
+    spec: []const u8,
+) void {
+    const result = std.process.run(b.allocator, b.graph.io, .{
+        .argv = &.{ executable, "--print-errors", "--exists", spec },
+        .environ_map = environ,
+    }) catch |err| {
+        std.log.err("failed to execute '{s}' while checking Linux SDL dependency '{s}': {s}", .{ executable, package, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer b.allocator.free(result.stdout);
+    defer b.allocator.free(result.stderr);
+    if (!termSucceeded(result.term)) {
+        std.log.err("required Linux SDL dependency '{s}' was not found:\n{s}", .{ package, std.mem.trim(u8, result.stderr, " \r\n") });
+        std.process.exit(1);
+    }
+}
+
+fn runCommand(
+    b: *std.Build,
+    argv: []const []const u8,
+    environ: ?*const std.process.Environ.Map,
+    context: []const u8,
+) []const u8 {
+    const result = std.process.run(b.allocator, b.graph.io, .{ .argv = argv, .environ_map = environ }) catch |err| {
+        std.log.err("failed to execute '{s}' while discovering '{s}': {s}", .{ argv[0], context, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer b.allocator.free(result.stdout);
+    defer b.allocator.free(result.stderr);
+    if (!termSucceeded(result.term)) {
+        std.log.err("'{s}' failed while discovering '{s}':\n{s}", .{ argv[0], context, std.mem.trim(u8, result.stderr, " \r\n") });
+        std.process.exit(1);
+    }
+    const output = if (std.mem.trim(u8, result.stdout, " \r\n").len > 0) result.stdout else result.stderr;
+    return b.dupe(std.mem.trim(u8, output, " \r\n"));
+}
+
+fn termSucceeded(term: std.process.Child.Term) bool {
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+fn parseShellWords(b: *std.Build, input: []const u8) []const []const u8 {
+    var words: std.ArrayList([]const u8) = .empty;
+    var word: std.ArrayList(u8) = .empty;
+    var quote: ?u8 = null;
+    var escaping = false;
+
+    for (input) |byte| {
+        if (escaping) {
+            word.append(b.allocator, byte) catch @panic("out of memory");
+            escaping = false;
+        } else if (byte == '\\' and quote != '\'') {
+            escaping = true;
+        } else if (quote) |delimiter| {
+            if (byte == delimiter) {
+                quote = null;
+            } else {
+                word.append(b.allocator, byte) catch @panic("out of memory");
+            }
+        } else if (byte == '\'' or byte == '"') {
+            quote = byte;
+        } else if (std.ascii.isWhitespace(byte)) {
+            if (word.items.len > 0) {
+                words.append(b.allocator, b.dupe(word.items)) catch @panic("out of memory");
+                word.clearRetainingCapacity();
+            }
+        } else {
+            word.append(b.allocator, byte) catch @panic("out of memory");
+        }
+    }
+    if (escaping or quote != null) {
+        std.log.err("invalid shell escaping in pkg-config output: {s}", .{input});
+        std.process.exit(1);
+    }
+    if (word.items.len > 0) {
+        words.append(b.allocator, b.dupe(word.items)) catch @panic("out of memory");
+    }
+    return words.toOwnedSlice(b.allocator) catch @panic("out of memory");
+}
+
+fn appendUnique(b: *std.Build, list: *std.ArrayList([]const u8), value: []const u8) void {
+    for (list.items) |existing| {
+        if (std.mem.eql(u8, existing, value)) return;
+    }
+    list.append(b.allocator, b.dupe(value)) catch @panic("out of memory");
+}
+
+fn pkgConfigOutputError(package: []const u8) noreturn {
+    std.log.err("invalid pkg-config output for Linux SDL dependency '{s}'", .{package});
+    std.process.exit(1);
+}
+
+fn pkgConfigVersion(
+    b: *std.Build,
+    executable: []const u8,
+    environ: *const std.process.Environ.Map,
+    package: []const u8,
+) std.SemanticVersion {
+    const output = runCommand(b, &.{ executable, "--modversion", package }, environ, package);
+    return std.SemanticVersion.parse(output) catch @panic("semantic version parse error");
+}
+
+fn discoverSoname(
+    b: *std.Build,
+    pkg_config_exe: []const u8,
+    readelf: []const u8,
+    sysroot: ?[]const u8,
+    environ: *const std.process.Environ.Map,
+    spec: SonameSpec,
+) []const u8 {
+    const raw_libdir = runCommand(b, &.{ pkg_config_exe, "--variable=libdir", spec.package }, environ, spec.package);
+
+    var library_dirs: std.ArrayList([]const u8) = .empty;
+    if (raw_libdir.len > 0) appendUnique(b, &library_dirs, sysrootPath(b, sysroot, raw_libdir));
+    for (library_dirs.items) |libdir| {
+        const library_path = b.pathJoin(&.{ libdir, b.fmt("lib{s}.so", .{spec.key}) });
+        if (tryReadSoname(b, readelf, environ, library_path)) |soname| return soname;
+    }
+
+    std.log.err("unable to inspect target shared library 'lib{s}.so' for pkg-config package '{s}'", .{ spec.key, spec.package });
+    std.process.exit(1);
+}
+
+fn tryReadSoname(
+    b: *std.Build,
+    readelf: []const u8,
+    environ: *const std.process.Environ.Map,
+    library_path: []const u8,
+) ?[]const u8 {
+    const result = std.process.run(b.allocator, b.graph.io, .{
+        .argv = &.{ readelf, "-dW", library_path },
+        .environ_map = environ,
+    }) catch return null;
+    defer b.allocator.free(result.stdout);
+    defer b.allocator.free(result.stderr);
+    if (!termSucceeded(result.term)) return null;
+    const marker = "Library soname: [";
+    const marker_index = std.mem.indexOf(u8, result.stdout, marker) orelse return null;
+    const value_start = marker_index + marker.len;
+    const value_end = std.mem.findScalarPos(u8, result.stdout, value_start, ']') orelse return null;
+    return b.dupe(result.stdout[value_start..value_end]);
+}
+
+fn sysrootPath(b: *std.Build, sysroot: ?[]const u8, path: []const u8) []const u8 {
+    const root = sysroot orelse return path;
+    if (!std.fs.path.isAbsolute(path) or std.mem.startsWith(u8, path, root)) return path;
+    return b.pathJoin(&.{ root, std.mem.trimStart(u8, path, "/\\") });
+}
+
+fn sonameOverride(overrides: ?[]const []const u8, key: []const u8) ?[]const u8 {
+    const values = overrides orelse return null;
+    for (values) |entry| {
+        const found_key, const value = std.mem.cutScalar(u8, entry, '=') orelse {
+            std.log.err("expected SONAME override in the form '<library>=<soname>', found '{s}'", .{entry});
+            std.process.exit(1);
+        };
+        if (std.ascii.eqlIgnoreCase(found_key, key)) return value;
+    }
+    return null;
+}
+
+fn validateSoname(key: []const u8, value: []const u8) void {
+    if (value.len == 0) {
+        std.log.err("empty SONAME discovered for '{s}'", .{key});
+        std.process.exit(1);
+    }
+    for (value) |byte| {
+        if (byte == '"' or byte == '\\' or std.ascii.isControl(byte)) {
+            std.log.err("invalid character in SONAME '{s}' for '{s}'", .{ value, key });
+            std.process.exit(1);
+        }
+    }
+}
+
+fn sonameValue(b: *std.Build, deps: ?LinuxDeps, key: []const u8) []const u8 {
+    const linux_deps = deps orelse return "";
+    return b.fmt("\"{s}\"", .{linux_deps.soname(key)});
+}
+
+const VersionKind = enum { xkbcommon, libdecor };
+const VersionComponent = enum { major, minor, patch };
+
+fn versionComponent(deps: ?LinuxDeps, kind: VersionKind, component: VersionComponent) ?i64 {
+    const linux_deps = deps orelse return null;
+    const version = switch (kind) {
+        .xkbcommon => linux_deps.xkbcommon_version,
+        .libdecor => linux_deps.libdecor_version,
+    };
+    return @intCast(switch (component) {
+        .major => version.major,
+        .minor => version.minor,
+        .patch => version.patch,
+    });
 }
 
 const platform_struct = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     strip: ?bool,
-    sanitize_c: ?bool,
+    sanitize_c: ?std.zig.SanitizeC,
     pic: ?bool,
-    lto: ?bool,
+    lto: ?std.zig.LtoMode,
     emscripten_pthreads: bool,
     build_configheader: *std.Build.Step.ConfigHeader,
     revision_configheader: *std.Build.Step.ConfigHeader,
     sdl_dep: *std.Build.Dependency,
     sdl_library: *std.Build.Step.Compile,
+    linux_deps: ?*const LinuxDeps,
 };
 
 fn addPlatformSources(
     b: *std.Build,
     module: *std.Build.Module,
     platform: platform_struct,
-    cflags: []const []const u8
+    cflags: []const []const u8,
 ) void {
     const sdl_source_lazypath = platform.sdl_dep.path("src");
     const sdl_include_lazypath = platform.sdl_dep.path("include");
@@ -959,12 +1357,12 @@ fn addPlatformSources(
         "libm/s_sin.c",
         "libm/s_tan.c",
     };
-    
+
     switch (platform.sdl_library.linkage.?) {
         .static => {
             module.addCSourceFiles(.{
                 .root = sdl_source_lazypath,
-                .flags = cflags.items,
+                .flags = cflags,
                 .files = &sdl_uclibc_c_files,
             });
         },
@@ -992,9 +1390,12 @@ fn addPlatformSources(
             sdl_uclibc_mod.addIncludePath(sdl_include_lazypath);
             sdl_uclibc_mod.addIncludePath(sdl_source_lazypath);
 
+            var uclibc_flags: std.ArrayList([]const u8) = .empty;
+            uclibc_flags.appendSlice(b.allocator, cflags) catch @panic("out of memory");
+            uclibc_flags.append(b.allocator, "-fvisibility=hidden") catch @panic("out of memory");
             sdl_uclibc_mod.addCSourceFiles(.{
                 .root = sdl_source_lazypath,
-                .flags = &(cflags ++ .{"-fvisibility=hidden"}),
+                .flags = uclibc_flags.items,
                 .files = &sdl_uclibc_c_files,
             });
 
@@ -1004,22 +1405,9 @@ fn addPlatformSources(
 
     switch (platform.target.result.os.tag) {
         .linux => {
-            pkgConfig(b, module, "x11");
-            pkgConfig(b, module, "xcursor");
-            pkgConfig(b, module, "xext");
-            pkgConfig(b, module, "xfixes");
-            pkgConfig(b, module, "xi");
-            pkgConfig(b, module, "xrandr");
-            pkgConfig(b, module, "xss");
-            pkgConfig(b, module, "xtst");
-            pkgConfig(b, module, "wayland-client");
-            pkgConfig(b, module, "wayland-cursor");
-            pkgConfig(b, module, "wayland-egl");
-            pkgConfig(b, module, "xkbcommon");
-
             module.addCSourceFiles(.{
                 .root = sdl_source_lazypath,
-                .flags = cflags.items,
+                .flags = cflags,
                 .files = &.{
                     "audio/dummy/SDL_dummyaudio.c",
                     "audio/disk/SDL_diskaudio.c",
@@ -1161,27 +1549,48 @@ fn addPlatformSources(
                 },
             });
 
-            const io = b.graph.io;
-            const wayland_protocols_lazypath = platform.sdl_dep.path("wayland-protocols");
-            const wayland_protocols_path = try wayland_protocols_lazypath.getPath4(b, null);
-            const dir = try wayland_protocols_path.openDir(io, "", .{ .iterate = true });
-            defer dir.close(io);
-
-            var iterator = dir.iterate();
-            while (try iterator.next(io)) |entry| {
-                if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.name, ".xml")) continue;
-
-                const xml_path = b.pathJoin(&.{ wayland_protocols_lazypath, entry.name });
-                const protocol_stem = std.fs.path.stem(entry.name);
+            const wayland_protocols = [_][]const u8{
+                "alpha-modifier-v1.xml",
+                "color-management-v1.xml",
+                "cursor-shape-v1.xml",
+                "fractional-scale-v1.xml",
+                "frog-color-management-v1.xml",
+                "idle-inhibit-unstable-v1.xml",
+                "input-timestamps-unstable-v1.xml",
+                "keyboard-shortcuts-inhibit-unstable-v1.xml",
+                "pointer-constraints-unstable-v1.xml",
+                "pointer-gestures-unstable-v1.xml",
+                "pointer-warp-v1.xml",
+                "primary-selection-unstable-v1.xml",
+                "relative-pointer-unstable-v1.xml",
+                "tablet-v2.xml",
+                "text-input-unstable-v3.xml",
+                "viewporter.xml",
+                "wayland.xml",
+                "xdg-activation-v1.xml",
+                "xdg-decoration-unstable-v1.xml",
+                "xdg-dialog-v1.xml",
+                "xdg-foreign-unstable-v2.xml",
+                "xdg-output-unstable-v1.xml",
+                "xdg-shell.xml",
+                "xdg-toplevel-icon-v1.xml",
+            };
+            const deps = platform.linux_deps.?;
+            for (wayland_protocols) |xml_name| {
+                const xml = platform.sdl_dep.path(b.pathJoin(&.{ "wayland-protocols", xml_name }));
+                const protocol_stem = std.fs.path.stem(xml_name);
                 const header_name = b.fmt("{s}-client-protocol.h", .{protocol_stem});
                 const source_name = b.fmt("{s}-protocol.c", .{protocol_stem});
 
-                const header_step = b.addSystemCommand(&.{ "wayland-scanner", "client-header", xml_path });
+                const header_step = b.addSystemCommand(&.{ deps.wayland_scanner, "client-header" });
+                header_step.addFileArg(xml);
                 const header = header_step.addOutputFileArg(header_name);
-                module.addIncludePath(header);
-                const source_step = b.addSystemCommand(&.{ "wayland-scanner", "private-code", xml_path });
+                module.addIncludePath(header.dirname());
+
+                const source_step = b.addSystemCommand(&.{ deps.wayland_scanner, deps.wayland_scanner_mode });
+                source_step.addFileArg(xml);
                 const generated_source = source_step.addOutputFileArg(source_name);
+                source_step.step.dependOn(&header_step.step);
                 module.addCSourceFile(.{ .file = generated_source, .flags = cflags });
             }
         },
@@ -1304,9 +1713,7 @@ fn addPlatformSources(
                 });
             }
             if (platform.sdl_library.linkage.? == .dynamic) {
-                module.addWin32ResourceFile(.{
-                    .file = sdl_source_lazypath.path("core/windows/version.rc")
-                });
+                module.addWin32ResourceFile(.{ .file = sdl_source_lazypath.path(b, "core/windows/version.rc") });
             }
             module.linkSystemLibrary("kernel32", .{});
             module.linkSystemLibrary("user32", .{});
@@ -1513,7 +1920,7 @@ fn addPlatformSources(
     }
 
     if (platform.sdl_library.linkage.? == .dynamic) {
-        platform.sdl_library.setVersionScript(sdl_source_lazypath.path("dynapi/SDL_dynapi.sym"));
+        platform.sdl_library.setVersionScript(sdl_source_lazypath.path(b, "dynapi/SDL_dynapi.sym"));
         platform.sdl_library.linker_allow_undefined_version = true;
     }
 }

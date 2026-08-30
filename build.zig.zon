@@ -35,6 +35,7 @@
         .sdl3 = .{
             .url = "https://github.com/libsdl-org/SDL/releases/download/release-3.4.14/SDL3-3.4.14.zip",
             .hash = "N-V-__8AAHrc9QI7YYgVcofe9I-VBIHA2YO8c7MHQqANfHb1",
+            .lazy = true,
         },
     },
     .paths = .{
