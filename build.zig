@@ -778,7 +778,27 @@ pub fn build(b: *std.Build) !void {
     translate.addIncludePath(sdl_include);
     translate.addConfigHeader(build_config_h);
     translate.addConfigHeader(revision);
-    _ = translate.addModule("sdl");
+    const sdl_translate_module = translate.addModule("sdl");
+
+    const demo_module = b.createModule(.{
+        .root_source_file = b.path("src/sdl_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    demo_module.addImport("sdl", sdl_translate_module);
+    demo_module.linkLibrary(sdl_lib);
+
+    const demo = b.addExecutable(.{
+        .name = "sdl_demo",
+        .root_module = demo_module,
+    });
+    b.installArtifact(demo);
+
+    const run_demo = b.addRunArtifact(demo);
+    if (b.args) |args| run_demo.addArgs(args);
+    const run_step = b.step("run", "Run the SDL graphics demo");
+    run_step.dependOn(&run_demo.step);
 }
 
 const LinuxDiscoveryOptions = struct {
