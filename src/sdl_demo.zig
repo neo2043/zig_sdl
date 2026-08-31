@@ -1,4 +1,4 @@
-const sdl = @import("sdl");
+const sdl = @import("sdl3_tc");
 
 fn sdlError() error{SdlError} {
     return error.SdlError;

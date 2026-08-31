@@ -654,7 +654,7 @@ pub fn build(b: *std.Build) !void {
 
     const sdl_lib = b.addLibrary(.{
         .linkage = if (emscripten) .static else preferred_linkage,
-        .name = "SDL3",
+        .name = "sdl3_artifact",
         .root_module = sdl_module,
         .version = .{
             .major = parsed_version.major,
@@ -778,7 +778,7 @@ pub fn build(b: *std.Build) !void {
     translate.addIncludePath(sdl_include);
     translate.addConfigHeader(build_config_h);
     translate.addConfigHeader(revision);
-    const sdl_translate_module = translate.addModule("sdl");
+    const sdl_translate_module = translate.addModule("sdl3_tc");
 
     const demo_module = b.createModule(.{
         .root_source_file = b.path("src/sdl_demo.zig"),
@@ -786,7 +786,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    demo_module.addImport("sdl", sdl_translate_module);
+    demo_module.addImport("sdl3_tc", sdl_translate_module);
     demo_module.linkLibrary(sdl_lib);
 
     const demo = b.addExecutable(.{
